@@ -72,6 +72,7 @@ func (c *LogStreamer) writePump() {
 	// ticker := time.NewTicker(pingPeriod)
 	defer func() {
 		// ticker.Stop()
+		c.hub.unregister <- c
 		c.conn.Close()
 	}()
 	for {
@@ -81,23 +82,26 @@ func (c *LogStreamer) writePump() {
 			if !ok {
 				// The hub closed the channel.
 				c.conn.WriteMessage(websocket.CloseMessage, []byte{})
+				log.Fatal(ok)
 				return
 			}
 
 			w, err := c.conn.NextWriter(websocket.TextMessage)
 			if err != nil {
+				log.Fatal(err)
 				return
 			}
 			w.Write(message)
 
 			// Add queued chat messages to the current websocket message.
-			n := len(c.send)
-			for i := 0; i < n; i++ {
-				w.Write(newline)
-				w.Write(<-c.send)
-			}
+			// n := len(c.send)
+			// for i := 0; i < n; i++ {
+			// 	w.Write(newline)
+			// 	w.Write(<-c.send)
+			// }
 
 			if err := w.Close(); err != nil {
+				log.Fatal(err)
 				return
 			}
 			// case <-ticker.C:
@@ -122,5 +126,5 @@ func streamlogWs(hub *Hub, w http.ResponseWriter, r *http.Request) {
 	// Allow collection of memory referenced by the caller by doing all work in
 	// new goroutines.
 	go client.writePump()
-	go client.readPump()
+	// go client.readPump()
 }
