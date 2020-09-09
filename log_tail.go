@@ -91,7 +91,7 @@ func (lsrv *logTailService) Init(logDir string, lHub *logHub, statusHub *Hub) {
 		log.Fatal(err)
 	}
 
-	for i := 0; i < NumberOfBeaconNode-1; i++ {
+	for i := 0; i <= NumberOfBeaconNode-1; i++ {
 		go func(node int) {
 			n := "beacon" + strconv.Itoa(node)
 			streamer := openLatestLogForStream(logDir, "beacon", node, files, lHub.hubs["beacon"], statusHub)
@@ -100,8 +100,8 @@ func (lsrv *logTailService) Init(logDir string, lHub *logHub, statusHub *Hub) {
 		}(i)
 	}
 
-	for s := 0; s < NumberOfShards-1; s++ {
-		for i := 0; i < NumberOfNodePerShard; i++ {
+	for s := 0; s <= NumberOfShards-1; s++ {
+		for i := 0; i <= NumberOfNodePerShard-1; i++ {
 			go func(shard int, node int) {
 				shardChain := "shard" + strconv.Itoa(shard)
 				n := shardChain + strconv.Itoa(node)
@@ -138,11 +138,12 @@ func (l *logTail) readLogLine(line string) {
 		// "receive block" doesn't mean node has received the right block!
 		if strings.Contains(line, "enter voting phase") || strings.Contains(line, "sending vote...") {
 			l.latestBlockProducingStatus.Phase = "VOTING"
+			l.latestBlockProducingStatus.IsBlockReceived = true
 			if strings.Contains(line, "sending vote...") {
-				l.latestBlockProducingStatus.IsBlockReceived = true
 				l.latestBlockProducingStatus.IsVoteSent = true
 				return
 			}
+			return
 		}
 		if strings.Contains(line, "vote added") {
 			l.latestBlockProducingStatus.VoteCount++
@@ -150,6 +151,7 @@ func (l *logTail) readLogLine(line string) {
 		}
 		if strings.Contains(line, "commit block") {
 			l.latestBlockProducingStatus.Phase = "COMMIT"
+			return
 		}
 	}
 }
@@ -163,11 +165,6 @@ func (l *logTail) tailLog() {
 		log.Fatal(err)
 	}
 	for line := range t.Lines {
-		// go func(text string) {
-		// 	time.Sleep(100 * time.Millisecond)
-		// 	l.logHub.broadcast <- []byte(text)
-		// }(line.Text)
-
 		l.logHub.broadcast <- []byte(line.Text)
 	}
 }
@@ -180,12 +177,12 @@ func (l *logTail) Run() {
 
 func (l *logTail) getLatestConsensusStatus() {
 	previousFileSize := int64(0)
-	t := time.NewTicker(5 * time.Second)
+	t := time.NewTicker(10 * time.Second)
 	//scan file in reverse byte by byte until we find a new line -> analyze that line if it have 'BFT: new round' then read forward from that line until EOF to get latest consensus status
 
 	char := make([]byte, 1)
 	line := ""
-	var cursor int64 = 0
+	var cursor int64
 	readBackward := true
 	for {
 		<-t.C
@@ -208,7 +205,6 @@ func (l *logTail) getLatestConsensusStatus() {
 				IsSuspectDown:   l.isSuspectDown,
 			})
 			l.statusHub.broadcast <- statusBytes
-			fmt.Println("status sent")
 			continue
 		}
 		for {
@@ -219,6 +215,7 @@ func (l *logTail) getLatestConsensusStatus() {
 				if cursor != -1 && (char[0] == 10 || char[0] == 13) { // stop if we find a line
 					if strings.Contains(line, "BFT: new round") {
 						readBackward = false
+						line = ""
 						continue
 					}
 					line = ""
@@ -240,7 +237,6 @@ func (l *logTail) getLatestConsensusStatus() {
 					IsSuspectDown:   l.isSuspectDown,
 				})
 				l.statusHub.broadcast <- statusBytes
-				fmt.Println("status sent")
 				break
 			}
 		}

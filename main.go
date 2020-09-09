@@ -38,7 +38,7 @@ func main() {
 
 	lHub.hubs["beacon"] = newHub()
 	go lHub.hubs["beacon"].run()
-	for i := 0; i < NumberOfShards-1; i++ {
+	for i := 0; i <= NumberOfShards-1; i++ {
 		shardChain := "shard" + strconv.Itoa(i)
 		lHub.hubs[shardChain] = newHub()
 		go lHub.hubs[shardChain].run()
@@ -61,6 +61,8 @@ func main() {
 		}
 	})
 	http.HandleFunc("/logstatus", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Add("Access-Control-Allow-Origin", "*")
+		w.Header().Add("Access-Control-Allow-Methods", "GET")
 		streamStatusWs(statusHub, w, r)
 	})
 	err := http.ListenAndServe(*addr, nil)
