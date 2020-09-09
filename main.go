@@ -50,7 +50,6 @@ func main() {
 
 	fileServer := http.FileServer(http.Dir("./web"))
 	http.Handle("/", fileServer)
-	// http.Handle("/home", fileServer)
 	http.HandleFunc("/downloadlog", downloadLog)
 	http.HandleFunc("/streamlog", func(w http.ResponseWriter, r *http.Request) {
 		if nodeLogHub, ok := lHub.hubs[r.URL.Query().Get("node")]; ok {
@@ -60,8 +59,8 @@ func main() {
 		}
 	})
 	http.HandleFunc("/logstatus", func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Add("Access-Control-Allow-Origin", "*")
-		w.Header().Add("Access-Control-Allow-Methods", "GET")
+		// w.Header().Add("Access-Control-Allow-Origin", "*")
+		// w.Header().Add("Access-Control-Allow-Methods", "GET")
 		streamStatusWs(statusHub, w, r)
 	})
 	err := http.ListenAndServe(*addr, nil)
