@@ -94,7 +94,9 @@ func (lsrv *logTailService) Init(logDir string, lHub *logHub, statusHub *Hub) {
 	for i := 0; i <= NumberOfBeaconNode-1; i++ {
 		go func(node int) {
 			n := "beacon" + strconv.Itoa(node)
-			streamer := openLatestLogForStream(logDir, "beacon", node, files, lHub.hubs["beacon"], statusHub)
+			hub := newHub()
+			lHub.add(n, hub)
+			streamer := openLatestLogForStream(logDir, "beacon", node, files, hub, statusHub)
 			lsrv.addLogStreamer(n, streamer)
 			go streamer.Run()
 		}(i)
@@ -105,7 +107,9 @@ func (lsrv *logTailService) Init(logDir string, lHub *logHub, statusHub *Hub) {
 			go func(shard int, node int) {
 				shardChain := "shard" + strconv.Itoa(shard)
 				n := shardChain + strconv.Itoa(node)
-				streamer := openLatestLogForStream(logDir, shardChain, node, files, lHub.hubs[shardChain], statusHub)
+				hub := newHub()
+				lHub.add(n, hub)
+				streamer := openLatestLogForStream(logDir, shardChain, node, files, hub, statusHub)
 				lsrv.addLogStreamer(n, streamer)
 				go streamer.Run()
 			}(s, i)
@@ -177,7 +181,7 @@ func (l *logTail) Run() {
 
 func (l *logTail) getLatestConsensusStatus() {
 	previousFileSize := int64(0)
-	t := time.NewTicker(10 * time.Second)
+	t := time.NewTicker(6 * time.Second)
 	//scan file in reverse byte by byte until we find a new line -> analyze that line if it have 'BFT: new round' then read forward from that line until EOF to get latest consensus status
 
 	char := make([]byte, 1)
@@ -194,18 +198,8 @@ func (l *logTail) getLatestConsensusStatus() {
 		stat, _ := fileHandle.Stat()
 		filesize := stat.Size()
 		readBackward = true
-		l.isSuspectDown = false
-		if previousFileSize == filesize {
-			l.isSuspectDown = true
-			fileHandle.Close()
-			statusBytes, _ := json.Marshal(LogStatusReponse{
-				Node:            l.nodeNumber,
-				Chain:           l.chain,
-				ProducingStatus: l.latestBlockProducingStatus,
-				IsSuspectDown:   l.isSuspectDown,
-			})
-			l.statusHub.broadcast <- statusBytes
-			continue
+		if previousFileSize != filesize {
+			l.isSuspectDown = false
 		}
 		for {
 			if readBackward {

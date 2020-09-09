@@ -4,7 +4,6 @@ import (
 	"flag"
 	"log"
 	"net/http"
-	"strconv"
 	"sync"
 )
 
@@ -18,12 +17,19 @@ func serveHome(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
-	http.ServeFile(w, r, "home.html")
+	http.ServeFile(w, r, "./web/index.html")
 }
 
 type logHub struct {
 	hubsLck sync.RWMutex
 	hubs    map[string]*Hub
+}
+
+func (lhub *logHub) add(key string, hub *Hub) {
+	lhub.hubsLck.Lock()
+	lhub.hubs[key] = hub
+	go lhub.hubs[key].run()
+	lhub.hubsLck.Unlock()
 }
 
 func main() {
@@ -36,26 +42,19 @@ func main() {
 		hubs: make(map[string]*Hub),
 	}
 
-	lHub.hubs["beacon"] = newHub()
-	go lHub.hubs["beacon"].run()
-	for i := 0; i <= NumberOfShards-1; i++ {
-		shardChain := "shard" + strconv.Itoa(i)
-		lHub.hubs[shardChain] = newHub()
-		go lHub.hubs[shardChain].run()
-	}
-
 	statusHub := newHub()
 	go statusHub.run()
 
 	logService := logTailService{}
 	logService.Init(*logdir, &lHub, statusHub)
 
-	http.HandleFunc("/", serveHome)
-
+	fileServer := http.FileServer(http.Dir("./web"))
+	http.Handle("/", fileServer)
+	// http.Handle("/home", fileServer)
 	http.HandleFunc("/downloadlog", downloadLog)
 	http.HandleFunc("/streamlog", func(w http.ResponseWriter, r *http.Request) {
-		if chainLogHub, ok := lHub.hubs[r.Header.Get("chain")]; ok {
-			streamlogWs(chainLogHub, w, r)
+		if nodeLogHub, ok := lHub.hubs[r.URL.Query().Get("node")]; ok {
+			streamlogWs(nodeLogHub, w, r)
 		} else {
 			http.Error(w, "Chain not exist", 404)
 		}

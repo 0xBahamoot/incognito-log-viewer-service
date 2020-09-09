@@ -82,13 +82,12 @@ func (c *LogStreamer) writePump() {
 			if !ok {
 				// The hub closed the channel.
 				c.conn.WriteMessage(websocket.CloseMessage, []byte{})
-				log.Fatal(ok)
 				return
 			}
 
 			w, err := c.conn.NextWriter(websocket.TextMessage)
 			if err != nil {
-				log.Fatal(err)
+				// log.Fatal(err)
 				return
 			}
 			w.Write(message)
@@ -101,7 +100,7 @@ func (c *LogStreamer) writePump() {
 			// }
 
 			if err := w.Close(); err != nil {
-				log.Fatal(err)
+				// log.Fatal(err)
 				return
 			}
 			// case <-ticker.C:
