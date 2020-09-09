@@ -240,7 +240,7 @@ func (l *logTail) getLatestConsensusStatus() {
 }
 
 func (l *logTail) suspectDown() {
-	t := time.NewTicker(5 * time.Minute)
+	t := time.NewTicker(1 * time.Minute)
 	for {
 		<-t.C
 		l.isSuspectDown = true
