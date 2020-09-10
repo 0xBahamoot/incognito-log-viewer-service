@@ -51,9 +51,12 @@ func main() {
 
 	fileServer := http.FileServer(http.Dir("./web"))
 	http.Handle("/", fileServer)
+	staticHandler := http.StripPrefix("/logviewer", http.FileServer(http.Dir("./web")))
+	http.Handle("/logviewer", staticHandler)
 	http.HandleFunc("/downloadlog", downloadLog)
 	http.HandleFunc("/streamlog", func(w http.ResponseWriter, r *http.Request) {
 		node := r.URL.Query().Get("node")
+
 		if nodeLogHub, ok := lHub.hubs[node]; ok {
 			//retrieve lines from EOF
 			lines, _ := strconv.Atoi(r.URL.Query().Get("lines"))
