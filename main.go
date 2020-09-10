@@ -4,6 +4,7 @@ import (
 	"flag"
 	"log"
 	"net/http"
+	"strconv"
 	"sync"
 )
 
@@ -52,15 +53,20 @@ func main() {
 	http.Handle("/", fileServer)
 	http.HandleFunc("/downloadlog", downloadLog)
 	http.HandleFunc("/streamlog", func(w http.ResponseWriter, r *http.Request) {
-		if nodeLogHub, ok := lHub.hubs[r.URL.Query().Get("node")]; ok {
-			streamlogWs(nodeLogHub, w, r)
+		node := r.URL.Query().Get("node")
+		if nodeLogHub, ok := lHub.hubs[node]; ok {
+			//retrieve lines from EOF
+			lines, _ := strconv.Atoi(r.URL.Query().Get("lines"))
+			preStreamLog := []string{}
+			if lines > 0 {
+				preStreamLog = logService.currentTailer[node].RetrieveLineFromEOF(lines)
+			}
+			streamlogWs(nodeLogHub, w, r, preStreamLog)
 		} else {
 			http.Error(w, "Chain not exist", 404)
 		}
 	})
 	http.HandleFunc("/logstatus", func(w http.ResponseWriter, r *http.Request) {
-		// w.Header().Add("Access-Control-Allow-Origin", "*")
-		// w.Header().Add("Access-Control-Allow-Methods", "GET")
 		streamStatusWs(statusHub, w, r)
 	})
 	err := http.ListenAndServe(*addr, nil)

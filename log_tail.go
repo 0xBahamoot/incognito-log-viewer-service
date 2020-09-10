@@ -173,6 +173,40 @@ func (l *logTail) tailLog() {
 	}
 }
 
+func (l *logTail) RetrieveLineFromEOF(lines int) []string {
+	fileHandle, err := os.OpenFile(l.logDir+"/"+l.file.Name(), os.O_RDONLY, 0666)
+	if err != nil {
+		log.Fatal("Cannot open file")
+	}
+	defer fileHandle.Close()
+	result := []string{}
+	cursor := int64(0)
+	stat, _ := fileHandle.Stat()
+	filesize := stat.Size()
+	char := make([]byte, 1)
+	currentReadLine := 0
+	line := ""
+	for {
+		cursor-- //going backward
+		fileHandle.Seek(cursor, io.SeekEnd)
+		fileHandle.Read(char)
+		if cursor != -1 && (char[0] == 10 || char[0] == 13) { // stop if we find a line
+			currentReadLine++
+			result = append(result, line)
+			line = ""
+			continue
+		}
+		line = fmt.Sprintf("%s%s", string(char), line) // there is more efficient way
+		if cursor == -filesize {                       // stop if we are at the begining
+			break
+		}
+		if currentReadLine >= lines {
+			break
+		}
+	}
+	return result
+}
+
 func (l *logTail) Run() {
 	go l.suspectDown()
 	go l.getLatestConsensusStatus()
@@ -209,8 +243,6 @@ func (l *logTail) getLatestConsensusStatus() {
 				if cursor != -1 && (char[0] == 10 || char[0] == 13) { // stop if we find a line
 					if strings.Contains(line, "BFT: new round") {
 						readBackward = false
-						line = ""
-						continue
 					}
 					line = ""
 					continue

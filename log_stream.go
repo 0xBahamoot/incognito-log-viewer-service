@@ -12,15 +12,6 @@ import (
 const (
 	// Time allowed to write a message to the peer.
 	writeWait = 5 * time.Second
-
-	// // Time allowed to read the next pong message from the peer.
-	// pongWait = 60 * time.Second
-
-	// // Send pings to peer with this period. Must be less than pongWait.
-	// pingPeriod = (pongWait * 9) / 10
-
-	// Maximum message size allowed from peer.
-	// maxMessageSize = 512
 )
 
 var (
@@ -54,9 +45,6 @@ func (c *LogStreamer) readPump() {
 		c.hub.unregister <- c
 		c.conn.Close()
 	}()
-	// c.conn.SetReadLimit(maxMessageSize)
-	// c.conn.SetReadDeadline(time.Now().Add(pongWait))
-	// c.conn.SetPongHandler(func(string) error { c.conn.SetReadDeadline(time.Now().Add(pongWait)); return nil })
 	for {
 		_, message, err := c.conn.ReadMessage()
 		if err != nil {
@@ -72,9 +60,7 @@ func (c *LogStreamer) readPump() {
 
 // writePump pumps messages from the hub to the websocket connection.
 func (c *LogStreamer) writePump() {
-	// ticker := time.NewTicker(pingPeriod)
 	defer func() {
-		// ticker.Stop()
 		c.hub.unregister <- c
 		c.conn.Close()
 	}()
@@ -83,50 +69,42 @@ func (c *LogStreamer) writePump() {
 		case message, ok := <-c.send:
 			c.conn.SetWriteDeadline(time.Now().Add(writeWait))
 			if !ok {
-				// The hub closed the channel.
 				c.conn.WriteMessage(websocket.CloseMessage, []byte{})
 				return
 			}
 
 			w, err := c.conn.NextWriter(websocket.TextMessage)
 			if err != nil {
-				// log.Fatal(err)
+				log.Println(err)
 				return
 			}
 			w.Write(message)
 
-			// Add queued chat messages to the current websocket message.
-			// n := len(c.send)
-			// for i := 0; i < n; i++ {
-			// 	w.Write(newline)
-			// 	w.Write(<-c.send)
-			// }
-
 			if err := w.Close(); err != nil {
-				// log.Fatal(err)
+				log.Println(err)
 				return
 			}
-			// case <-ticker.C:
-			// 	c.conn.SetWriteDeadline(time.Now().Add(writeWait))
-			// 	if err := c.conn.WriteMessage(websocket.PingMessage, nil); err != nil {
-			// 		return
-			// 	}
 		}
 	}
 }
 
 // streamlogWs handles websocket requests from the peer.
-func streamlogWs(hub *Hub, w http.ResponseWriter, r *http.Request) {
+func streamlogWs(hub *Hub, w http.ResponseWriter, r *http.Request, preStreamLog []string) {
 	conn, err := upgrader.Upgrade(w, r, nil)
 	if err != nil {
 		log.Println(err)
 		return
 	}
-	client := &LogStreamer{hub: hub, conn: conn, send: make(chan []byte, 256), id: HashH([]byte(r.RemoteAddr))}
-	client.hub.register <- client
-
-	// Allow collection of memory referenced by the caller by doing all work in
-	// new goroutines.
+	sendBuffer := 256
+	client := &LogStreamer{hub: hub, conn: conn, send: make(chan []byte, sendBuffer), id: HashH([]byte(r.RemoteAddr))}
 	go client.writePump()
+
+	if len(preStreamLog) > 0 {
+		for _, log := range preStreamLog {
+			client.send <- []byte(log)
+		}
+	}
+
+	client.hub.register <- client
 	// go client.readPump()
 }
