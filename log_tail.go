@@ -35,43 +35,28 @@ type logTail struct {
 	chain                      string
 	nodeNumber                 int
 	logDir                     string
-	latestBlockProducingStatus BlockProducingStatus
 	file                       os.FileInfo
-	latestLine                 string
+	latestBlockProducingStatus BlockProducingStatus
 	isSuspectDown              bool
 	statusHub                  *Hub
 	logHub                     *Hub
+	resetTailLog               chan struct{}
 }
 
 func openLatestLogForStream(logDir, chain string, nodeNumber int, fileList []os.FileInfo, lHub *Hub, statusHub *Hub) *logTail {
-	date := time.Now().Format("2006-01-02")
-	filePrefix := chain + strconv.Itoa(nodeNumber) + "_new"
-	fileSuffix := date + ".log"
-	fmt.Println(filePrefix, fileSuffix)
-	var logFile os.FileInfo
+	filePrefix, fileSuffix := getLogFileName(chain, nodeNumber)
 OPENLATEST:
-	for _, file := range fileList {
-		if strings.HasPrefix(file.Name(), filePrefix) {
-			if strings.HasSuffix(file.Name(), fileSuffix) {
-				if logFile != nil {
-					if logFile.ModTime().Unix() < file.ModTime().Unix() {
-						logFile = file
-						continue
-					}
-				}
-				logFile = file
-			}
-		}
-	}
+	logFile := getLogFileForFileList(filePrefix, fileSuffix, fileList)
 	if logFile != nil {
 		newTailer := &logTail{
-			nodeNumber: nodeNumber,
-			logDir:     logDir,
-			chain:      chain,
-			logHub:     lHub,
-			statusHub:  statusHub,
+			chain:        chain,
+			nodeNumber:   nodeNumber,
+			logDir:       logDir,
+			logHub:       lHub,
+			statusHub:    statusHub,
+			file:         logFile,
+			resetTailLog: make(chan struct{}),
 		}
-		newTailer.file = logFile
 		return newTailer
 	}
 	//the wanted logFile not exist yet so wait for it
@@ -98,7 +83,7 @@ func (lsrv *logTailService) Init(logDir string, lHub *logHub, statusHub *Hub) {
 			lHub.add(n, hub)
 			streamer := openLatestLogForStream(logDir, "beacon", node, files, hub, statusHub)
 			lsrv.addLogStreamer(n, streamer)
-			go streamer.Run()
+			streamer.Run()
 		}(i)
 	}
 
@@ -111,7 +96,7 @@ func (lsrv *logTailService) Init(logDir string, lHub *logHub, statusHub *Hub) {
 				lHub.add(n, hub)
 				streamer := openLatestLogForStream(logDir, shardChain, node, files, hub, statusHub)
 				lsrv.addLogStreamer(n, streamer)
-				go streamer.Run()
+				streamer.Run()
 			}(s, i)
 		}
 	}
@@ -165,12 +150,28 @@ func (l *logTail) tailLog() {
 		Follow:   true,
 		Location: &tail.SeekInfo{0, io.SeekEnd},
 	})
+
 	if err != nil {
 		log.Fatal(err)
 	}
-	for line := range t.Lines {
-		l.logHub.broadcast <- []byte(line.Text)
+	for {
+		select {
+		case <-l.resetTailLog:
+			t.Stop()
+			t, err = tail.TailFile(l.logDir+"/"+l.file.Name(), tail.Config{
+				Follow:   true,
+				Location: &tail.SeekInfo{0, io.SeekEnd},
+			})
+			if err != nil {
+				log.Fatal(err)
+			}
+			log.Println("Reset tailler successful")
+		case line := <-t.Lines:
+			l.logHub.broadcast <- []byte(line.Text)
+		}
+
 	}
+
 }
 
 func (l *logTail) RetrieveLineFromEOF(lines int) []string {
@@ -211,11 +212,32 @@ func (l *logTail) Run() {
 	go l.suspectDown()
 	go l.getLatestConsensusStatus()
 	go l.tailLog()
+	go func() {
+	DAYWATCH:
+		nextDate, _ := time.Parse("2006-01-02", time.Now().AddDate(0, 0, 1).Format("2006-01-02"))
+		t := time.NewTimer(time.Until(nextDate.Add(10 * time.Second)))
+		<-t.C
+		log.Println("Resetting log tailler")
+		filePrefix, fileSuffix := getLogFileName(l.chain, l.nodeNumber)
+	GETLOGFILE:
+		fileList, err := ioutil.ReadDir(l.logDir)
+		if err != nil {
+			log.Fatal(err)
+		}
+		logFile := getLogFileForFileList(filePrefix, fileSuffix, fileList)
+		if logFile == nil {
+			time.Sleep(5 * time.Second)
+			goto GETLOGFILE
+		}
+		l.file = logFile
+		l.resetTailLog <- struct{}{}
+		goto DAYWATCH
+	}()
 }
 
 func (l *logTail) getLatestConsensusStatus() {
 	previousFileSize := int64(0)
-	t := time.NewTicker(6 * time.Second)
+	t := time.NewTicker(4 * time.Second)
 	//scan file in reverse byte by byte until we find a new line -> analyze that line if it have 'BFT: new round' then read forward from that line until EOF to get latest consensus status
 
 	char := make([]byte, 1)
@@ -277,4 +299,30 @@ func (l *logTail) suspectDown() {
 		<-t.C
 		l.isSuspectDown = true
 	}
+}
+
+func getLogFileName(chain string, nodeNumber int) (string, string) {
+	date := time.Now().Format("2006-01-02")
+	filePrefix := chain + strconv.Itoa(nodeNumber) + "_new"
+	fileSuffix := date + ".log"
+	return filePrefix, fileSuffix
+}
+
+//getLogFileForFileList is to guarantee to get the latest log file in case of IP change mid day
+func getLogFileForFileList(filePrefix, fileSuffix string, fileList []os.FileInfo) os.FileInfo {
+	var logFile os.FileInfo
+	for _, file := range fileList {
+		if strings.HasPrefix(file.Name(), filePrefix) {
+			if strings.HasSuffix(file.Name(), fileSuffix) {
+				if logFile != nil {
+					if logFile.ModTime().Unix() < file.ModTime().Unix() {
+						logFile = file
+						continue
+					}
+				}
+				logFile = file
+			}
+		}
+	}
+	return logFile
 }
