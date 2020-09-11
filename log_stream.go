@@ -100,8 +100,8 @@ func streamlogWs(hub *Hub, w http.ResponseWriter, r *http.Request, preStreamLog 
 	go client.writePump()
 
 	if len(preStreamLog) > 0 {
-		for _, log := range preStreamLog {
-			client.send <- []byte(log)
+		for i := len(preStreamLog) - 1; i >= 0; i-- {
+			client.send <- []byte(preStreamLog[i])
 		}
 	}
 
