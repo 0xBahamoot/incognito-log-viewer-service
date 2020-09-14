@@ -22,15 +22,6 @@ type logTailService struct {
 	currentTailer    map[string]*logTail
 }
 
-type BlockProducingStatus struct {
-	Phase           string
-	IsBlockReceived bool
-	IsVoteSent      bool
-	VoteCount       int
-	BlockHeight     int64
-	Round           int
-}
-
 type logTail struct {
 	chain                      string
 	nodeNumber                 int
@@ -41,6 +32,8 @@ type logTail struct {
 	statusHub                  *Hub
 	logHub                     *Hub
 	resetTailLog               chan struct{}
+	errorsCount                int
+	latestErrorLine            string
 }
 
 func openLatestLogForStream(logDir, chain string, nodeNumber int, fileList []os.FileInfo, lHub *Hub, statusHub *Hub) *logTail {
@@ -109,11 +102,12 @@ func (lsrv *logTailService) addLogStreamer(node string, streamer *logTail) {
 }
 
 func (l *logTail) readLogLine(line string) {
-	if strings.Contains(line, "Consensus log") {
-		var re1 = regexp.MustCompile(`(?m)BFT: new round => (\w+) (\d+) (\d+)`)
+	line = strings.ToLower(line)
+	if strings.Contains(line, "consensus log") {
+		var re1 = regexp.MustCompile(`(?m)bft: new round => (\w+) (\d+) (\d+)`)
 		bftStatus := re1.FindAllStringSubmatch(line, -1)
 		if len(bftStatus) == 1 {
-			l.latestBlockProducingStatus.Phase = bftStatus[0][1]
+			l.latestBlockProducingStatus.Phase = strings.ToUpper(bftStatus[0][1])
 			height, _ := strconv.Atoi(bftStatus[0][2])
 			l.latestBlockProducingStatus.BlockHeight = int64(height)
 			round, _ := strconv.Atoi(bftStatus[0][3])
@@ -158,6 +152,8 @@ func (l *logTail) tailLog() {
 		select {
 		case <-l.resetTailLog:
 			t.Stop()
+			l.errorsCount = 0
+			l.latestErrorLine = ""
 			t, err = tail.TailFile(l.logDir+"/"+l.file.Name(), tail.Config{
 				Follow:   true,
 				Location: &tail.SeekInfo{0, io.SeekEnd},
@@ -167,11 +163,14 @@ func (l *logTail) tailLog() {
 			}
 			log.Println("Reset tailler successful")
 		case line := <-t.Lines:
+			if strings.Contains(strings.ToLower(line.Text), "[err]") {
+				l.errorsCount++
+				l.latestErrorLine = strings.ToLower(line.Text)
+			}
 			l.logHub.broadcast <- []byte(line.Text)
 		}
 
 	}
-
 }
 
 func (l *logTail) RetrieveLineFromEOF(lines int) []string {
@@ -209,6 +208,7 @@ func (l *logTail) RetrieveLineFromEOF(lines int) []string {
 }
 
 func (l *logTail) Run() {
+	l.getErrorsOfLog()
 	go l.suspectDown()
 	go l.getLatestConsensusStatus()
 	go l.tailLog()
@@ -254,9 +254,6 @@ func (l *logTail) getLatestConsensusStatus() {
 		stat, _ := fileHandle.Stat()
 		filesize := stat.Size()
 		readBackward = true
-		if previousFileSize != filesize {
-			l.isSuspectDown = false
-		}
 		for {
 			if readBackward {
 				cursor-- //going backward
@@ -270,7 +267,19 @@ func (l *logTail) getLatestConsensusStatus() {
 					continue
 				}
 				line = fmt.Sprintf("%s%s", string(char), line) // there is more efficient way
-				if cursor == -filesize {                       // stop if we are at the begining
+				if cursor == -filesize {
+					if previousFileSize != filesize {
+						l.isSuspectDown = false
+					}
+					statusBytes, _ := json.Marshal(LogStatusReponse{
+						Node:            l.nodeNumber,
+						Chain:           l.chain,
+						ProducingStatus: BlockProducingStatus{"UNKNOWN", false, false, 0, 0, 0},
+						IsSuspectDown:   l.isSuspectDown,
+						ErrorsCount:     l.errorsCount,
+						LatestErrorLine: l.latestErrorLine,
+					})
+					l.statusHub.broadcast <- statusBytes // stop if we are at the begining
 					break
 				}
 			} else {
@@ -278,11 +287,16 @@ func (l *logTail) getLatestConsensusStatus() {
 				for scanner.Scan() {
 					l.readLogLine(scanner.Text())
 				}
+				if previousFileSize != filesize {
+					l.isSuspectDown = false
+				}
 				statusBytes, _ := json.Marshal(LogStatusReponse{
 					Node:            l.nodeNumber,
 					Chain:           l.chain,
 					ProducingStatus: l.latestBlockProducingStatus,
 					IsSuspectDown:   l.isSuspectDown,
+					ErrorsCount:     l.errorsCount,
+					LatestErrorLine: l.latestErrorLine,
 				})
 				l.statusHub.broadcast <- statusBytes
 				break
@@ -294,11 +308,27 @@ func (l *logTail) getLatestConsensusStatus() {
 }
 
 func (l *logTail) suspectDown() {
-	t := time.NewTicker(2 * time.Minute)
+	t := time.NewTicker(1 * time.Minute)
 	for {
 		<-t.C
 		l.isSuspectDown = true
 	}
+}
+
+func (l *logTail) getErrorsOfLog() {
+	fileHandle, err := os.OpenFile(l.logDir+"/"+l.file.Name(), os.O_RDONLY, 0666)
+	if err != nil {
+		log.Fatal("Cannot open file")
+	}
+
+	scanner := bufio.NewScanner(fileHandle)
+	for scanner.Scan() {
+		if strings.Contains(strings.ToLower(scanner.Text()), "[err]") {
+			l.errorsCount++
+			l.latestErrorLine = scanner.Text()
+		}
+	}
+
 }
 
 func getLogFileName(chain string, nodeNumber int) (string, string) {

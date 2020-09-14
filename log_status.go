@@ -10,6 +10,17 @@ type LogStatusReponse struct {
 	Chain           string
 	ProducingStatus BlockProducingStatus
 	IsSuspectDown   bool
+	ErrorsCount     int
+	LatestErrorLine string
+}
+
+type BlockProducingStatus struct {
+	Phase           string
+	IsBlockReceived bool
+	IsVoteSent      bool
+	VoteCount       int
+	BlockHeight     int64
+	Round           int
 }
 
 // streamlogWs handles websocket requests from the peer.
