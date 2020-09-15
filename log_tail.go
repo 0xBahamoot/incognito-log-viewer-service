@@ -273,7 +273,7 @@ func (l *logTail) Run() {
 		log.Fatal("Cannot open file")
 	}
 
-	lineCount := 0
+	lineCount := 1
 	scanner := bufio.NewScanner(fileHandle)
 	currentHeight := 0
 	for scanner.Scan() {
@@ -439,13 +439,15 @@ func (l *logTail) GetConsensusOfLog(height int) []string {
 		log.Fatal("Cannot open file")
 	}
 
-	fileHandle.Seek(int64(blkHeight.start), io.SeekStart)
+	fileHandle.Seek(0, io.SeekStart)
 	scanner := bufio.NewScanner(fileHandle)
 	currentLine := 1
 	for scanner.Scan() {
-		result = append(result, scanner.Text())
+		if currentLine >= blkHeight.start {
+			result = append(result, scanner.Text())
+		}
 		currentLine++
-		if (blkHeight.end != 0) && (currentLine == (blkHeight.end - blkHeight.start)) {
+		if (blkHeight.end != 0) && ((currentLine - blkHeight.start) == (blkHeight.end - blkHeight.start)) {
 			break
 		}
 	}

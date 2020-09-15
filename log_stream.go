@@ -124,7 +124,7 @@ func streamOnceWs(w http.ResponseWriter, r *http.Request, streamLogs []string) {
 	go client.writePump()
 
 	if len(streamLogs) > 0 {
-		for i := len(streamLogs) - 1; i >= 0; i-- {
+		for i := 0; i <= len(streamLogs)-1; i++ {
 			client.send <- []byte(streamLogs[i])
 		}
 	}
