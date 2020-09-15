@@ -201,25 +201,27 @@ func (l *logTail) tailLog() {
 						log.Println(l.chain, l.nodeNumber, currentHeight, l.heightsRecord[currentHeight])
 					}
 					currentHeight = height
-					l.heightsRecord[currentHeight] = struct {
-						start int
-						end   int
-					}{
-						start: lineCount - 1,
-					}
-				}
-				if currentHeight != 0 {
-					start := l.heightsRecord[currentHeight].start
-					l.heightsRecord[currentHeight] = struct {
-						start int
-						end   int
-					}{
-						start: start,
-						end:   lineCount - 1,
+					if _, ok := l.heightsRecord[currentHeight]; !ok {
+						l.heightsRecord[currentHeight] = struct {
+							start int
+							end   int
+						}{
+							start: lineCount - 1,
+						}
 					}
 				}
 			}
 
+			if currentHeight != 0 {
+				start := l.heightsRecord[currentHeight].start
+				l.heightsRecord[currentHeight] = struct {
+					start int
+					end   int
+				}{
+					start: start,
+					end:   lineCount - 1,
+				}
+			}
 			l.readLogLine(line.Text)
 			l.logHub.broadcast <- []byte(line.Text)
 		}
@@ -300,22 +302,24 @@ func (l *logTail) Run() {
 					// log.Println(currentHeight, l.heightsRecord[currentHeight])
 				}
 				currentHeight = height
-				l.heightsRecord[currentHeight] = struct {
-					start int
-					end   int
-				}{
-					start: lineCount - 1,
+				if _, ok := l.heightsRecord[currentHeight]; !ok {
+					l.heightsRecord[currentHeight] = struct {
+						start int
+						end   int
+					}{
+						start: lineCount - 1,
+					}
 				}
 			}
-			if currentHeight != 0 {
-				start := l.heightsRecord[currentHeight].start
-				l.heightsRecord[currentHeight] = struct {
-					start int
-					end   int
-				}{
-					start: start,
-					end:   lineCount - 1,
-				}
+		}
+		if currentHeight != 0 {
+			start := l.heightsRecord[currentHeight].start
+			l.heightsRecord[currentHeight] = struct {
+				start int
+				end   int
+			}{
+				start: start,
+				end:   lineCount - 1,
 			}
 		}
 
