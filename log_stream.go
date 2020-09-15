@@ -42,7 +42,9 @@ type LogStreamer struct {
 // readPump pumps messages from the websocket connection to the hub.
 func (c *LogStreamer) readPump() {
 	defer func() {
-		c.hub.unregister <- c
+		if c.hub != nil {
+			c.hub.unregister <- c
+		}
 		c.conn.Close()
 	}()
 	for {
@@ -61,7 +63,9 @@ func (c *LogStreamer) readPump() {
 // writePump pumps messages from the hub to the websocket connection.
 func (c *LogStreamer) writePump() {
 	defer func() {
-		c.hub.unregister <- c
+		if c.hub != nil {
+			c.hub.unregister <- c
+		}
 		c.conn.Close()
 	}()
 	for {
@@ -89,7 +93,7 @@ func (c *LogStreamer) writePump() {
 }
 
 // streamlogWs handles websocket requests from the peer.
-func streamlogWs(hub *Hub, w http.ResponseWriter, r *http.Request, preStreamLog []string) {
+func streamlogWs(hub *Hub, w http.ResponseWriter, r *http.Request, preStreamLogs []string) {
 	conn, err := upgrader.Upgrade(w, r, nil)
 	if err != nil {
 		log.Println(err)
@@ -99,12 +103,30 @@ func streamlogWs(hub *Hub, w http.ResponseWriter, r *http.Request, preStreamLog 
 	client := &LogStreamer{hub: hub, conn: conn, send: make(chan []byte, sendBuffer), id: HashH([]byte(r.RemoteAddr))}
 	go client.writePump()
 
-	if len(preStreamLog) > 0 {
-		for i := len(preStreamLog) - 1; i >= 0; i-- {
-			client.send <- []byte(preStreamLog[i])
+	if len(preStreamLogs) > 0 {
+		for i := len(preStreamLogs) - 1; i >= 0; i-- {
+			client.send <- []byte(preStreamLogs[i])
 		}
 	}
 
 	client.hub.register <- client
 	// go client.readPump()
+}
+
+func streamOnceWs(w http.ResponseWriter, r *http.Request, streamLogs []string) {
+	conn, err := upgrader.Upgrade(w, r, nil)
+	if err != nil {
+		log.Println(err)
+		return
+	}
+	sendBuffer := 256
+	client := &LogStreamer{hub: nil, conn: conn, send: make(chan []byte, sendBuffer), id: HashH([]byte(r.RemoteAddr))}
+	go client.writePump()
+
+	if len(streamLogs) > 0 {
+		for i := len(streamLogs) - 1; i >= 0; i-- {
+			client.send <- []byte(streamLogs[i])
+		}
+	}
+	close(client.send)
 }

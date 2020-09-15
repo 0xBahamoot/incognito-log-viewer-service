@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/json"
 	"flag"
 	"log"
 	"net/http"
@@ -65,6 +66,32 @@ func main() {
 				preStreamLog = logService.currentTailer[node].RetrieveLineFromEOF(lines)
 			}
 			streamlogWs(nodeLogHub, w, r, preStreamLog)
+		} else {
+			http.Error(w, "Chain not exist", 404)
+		}
+	})
+	http.HandleFunc("/getnodesheight", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Access-Control-Allow-Origin", "*")
+		node := r.URL.Query().Get("node")
+		if _, ok := lHub.hubs[node]; ok {
+			heights := logService.currentTailer[node].GetHeightsRecord()
+			heightsByte, _ := json.Marshal(heights)
+			w.Write(heightsByte)
+			return
+		} else {
+			http.Error(w, "Chain not exist", 404)
+		}
+
+	})
+	http.HandleFunc("/getheightlog", func(w http.ResponseWriter, r *http.Request) {
+		node := r.URL.Query().Get("node")
+		if _, ok := lHub.hubs[node]; ok {
+			height, _ := strconv.Atoi(r.URL.Query().Get("height"))
+			heightlogs := []string{}
+			if height > 0 {
+				heightlogs = logService.currentTailer[node].GetConsensusOfLog(height)
+			}
+			streamOnceWs(w, r, heightlogs)
 		} else {
 			http.Error(w, "Chain not exist", 404)
 		}

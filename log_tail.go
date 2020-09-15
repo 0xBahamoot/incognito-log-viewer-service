@@ -9,6 +9,7 @@ import (
 	"log"
 	"os"
 	"regexp"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -34,6 +35,11 @@ type logTail struct {
 	resetTailLog               chan struct{}
 	errorsCount                int
 	latestErrorLine            string
+	heightsRecordLck           sync.RWMutex
+	heightsRecord              map[int]struct {
+		start int
+		end   int
+	}
 }
 
 func openLatestLogForStream(logDir, chain string, nodeNumber int, fileList []os.FileInfo, lHub *Hub, statusHub *Hub) *logTail {
@@ -148,6 +154,12 @@ func (l *logTail) tailLog() {
 	if err != nil {
 		log.Fatal(err)
 	}
+	lineCount := 0
+	currentHeight := 0
+	if l.latestBlockProducingStatus.BlockHeight != 0 {
+		lineCount = l.heightsRecord[int(l.latestBlockProducingStatus.BlockHeight)].end
+		currentHeight = int(l.latestBlockProducingStatus.BlockHeight)
+	}
 	for {
 		select {
 		case <-l.resetTailLog:
@@ -163,10 +175,52 @@ func (l *logTail) tailLog() {
 			}
 			log.Println("Reset tailler successful")
 		case line := <-t.Lines:
+			l.isSuspectDown = false
+			lineCount++
+			//update errors
 			if strings.Contains(strings.ToLower(line.Text), "[err]") {
 				l.errorsCount++
 				l.latestErrorLine = strings.ToLower(line.Text)
 			}
+
+			//update consensus
+			if strings.Contains(line.Text, "BFT: new round") {
+				var re1 = regexp.MustCompile(`(?m)BFT: new round => (\w+) (\d+) (\d+)`)
+				bftStatus := re1.FindAllStringSubmatch(line.Text, -1)
+				if len(bftStatus) == 1 {
+					height, _ := strconv.Atoi(bftStatus[0][2])
+					if currentHeight != height && currentHeight != 0 {
+						start := l.heightsRecord[currentHeight].start
+						l.heightsRecord[currentHeight] = struct {
+							start int
+							end   int
+						}{
+							start: start,
+							end:   lineCount - 1,
+						}
+						log.Println(l.chain, l.nodeNumber, currentHeight, l.heightsRecord[currentHeight])
+					}
+					currentHeight = height
+					l.heightsRecord[currentHeight] = struct {
+						start int
+						end   int
+					}{
+						start: lineCount - 1,
+					}
+				}
+				if currentHeight != 0 {
+					start := l.heightsRecord[currentHeight].start
+					l.heightsRecord[currentHeight] = struct {
+						start int
+						end   int
+					}{
+						start: start,
+						end:   lineCount - 1,
+					}
+				}
+			}
+
+			l.readLogLine(line.Text)
 			l.logHub.broadcast <- []byte(line.Text)
 		}
 
@@ -208,10 +262,68 @@ func (l *logTail) RetrieveLineFromEOF(lines int) []string {
 }
 
 func (l *logTail) Run() {
-	l.getErrorsOfLog()
-	go l.suspectDown()
-	go l.getLatestConsensusStatus()
+
+	l.heightsRecord = make(map[int]struct {
+		start int
+		end   int
+	})
+	//count and get latest error of log
+	fileHandle, err := os.OpenFile(l.logDir+"/"+l.file.Name(), os.O_RDONLY, 0666)
+	if err != nil {
+		log.Fatal("Cannot open file")
+	}
+
+	lineCount := 0
+	scanner := bufio.NewScanner(fileHandle)
+	currentHeight := 0
+	for scanner.Scan() {
+		line := scanner.Text()
+		lineCount++
+		if strings.Contains(strings.ToLower(line), "[err]") {
+			l.errorsCount++
+			l.latestErrorLine = scanner.Text()
+		}
+		if strings.Contains(line, "BFT: new round") {
+			var re1 = regexp.MustCompile(`(?m)BFT: new round => (\w+) (\d+) (\d+)`)
+			bftStatus := re1.FindAllStringSubmatch(line, -1)
+			if len(bftStatus) == 1 {
+				height, _ := strconv.Atoi(bftStatus[0][2])
+				if currentHeight != height && currentHeight != 0 {
+					start := l.heightsRecord[currentHeight].start
+					l.heightsRecord[currentHeight] = struct {
+						start int
+						end   int
+					}{
+						start: start,
+						end:   lineCount - 1,
+					}
+					// log.Println(currentHeight, l.heightsRecord[currentHeight])
+				}
+				currentHeight = height
+				l.heightsRecord[currentHeight] = struct {
+					start int
+					end   int
+				}{
+					start: lineCount - 1,
+				}
+			}
+			if currentHeight != 0 {
+				start := l.heightsRecord[currentHeight].start
+				l.heightsRecord[currentHeight] = struct {
+					start int
+					end   int
+				}{
+					start: start,
+					end:   lineCount - 1,
+				}
+			}
+		}
+
+		l.readLogLine(line)
+	}
 	go l.tailLog()
+	go l.suspectDown()
+	go l.sendLatestConsensusStatus()
 	go func() {
 	DAYWATCH:
 		nextDate, _ := time.Parse("2006-01-02", time.Now().AddDate(0, 0, 1).Format("2006-01-02"))
@@ -235,75 +347,74 @@ func (l *logTail) Run() {
 	}()
 }
 
-func (l *logTail) getLatestConsensusStatus() {
-	previousFileSize := int64(0)
-	t := time.NewTicker(4 * time.Second)
-	//scan file in reverse byte by byte until we find a new line -> analyze that line if it have 'BFT: new round' then read forward from that line until EOF to get latest consensus status
+func (l *logTail) sendLatestConsensusStatus() {
 
-	char := make([]byte, 1)
-	line := ""
-	var cursor int64
-	readBackward := true
+	t := time.NewTicker(6 * time.Second)
+	//scan file in reverse byte by byte until we find a new line -> analyze that line if it have 'BFT: new round' then read forward from that line until EOF to get latest consensus status
+	// previousFileSize := int64(0)
+	// char := make([]byte, 1)
+	// line := ""
+	// var cursor int64
+	// readBackward := true
 	for {
 		<-t.C
-		fileHandle, err := os.OpenFile(l.logDir+"/"+l.file.Name(), os.O_RDONLY, 0666)
-		if err != nil {
-			log.Fatal("Cannot open file")
-		}
-		cursor = 0
-		stat, _ := fileHandle.Stat()
-		filesize := stat.Size()
-		readBackward = true
-		for {
-			if readBackward {
-				cursor-- //going backward
-				fileHandle.Seek(cursor, io.SeekEnd)
-				fileHandle.Read(char)
-				if cursor != -1 && (char[0] == 10 || char[0] == 13) { // stop if we find a line
-					if strings.Contains(line, "BFT: new round") {
-						readBackward = false
-					}
-					line = ""
-					continue
-				}
-				line = fmt.Sprintf("%s%s", string(char), line) // there is more efficient way
-				if cursor == -filesize {
-					if previousFileSize != filesize {
-						l.isSuspectDown = false
-					}
-					statusBytes, _ := json.Marshal(LogStatusReponse{
-						Node:            l.nodeNumber,
-						Chain:           l.chain,
-						ProducingStatus: BlockProducingStatus{"UNKNOWN", false, false, 0, 0, 0},
-						IsSuspectDown:   l.isSuspectDown,
-						ErrorsCount:     l.errorsCount,
-						LatestErrorLine: l.latestErrorLine,
-					})
-					l.statusHub.broadcast <- statusBytes // stop if we are at the begining
-					break
-				}
-			} else {
-				scanner := bufio.NewScanner(fileHandle)
-				for scanner.Scan() {
-					l.readLogLine(scanner.Text())
-				}
-				if previousFileSize != filesize {
-					l.isSuspectDown = false
-				}
-				statusBytes, _ := json.Marshal(LogStatusReponse{
-					Node:            l.nodeNumber,
-					Chain:           l.chain,
-					ProducingStatus: l.latestBlockProducingStatus,
-					IsSuspectDown:   l.isSuspectDown,
-					ErrorsCount:     l.errorsCount,
-					LatestErrorLine: l.latestErrorLine,
-				})
-				l.statusHub.broadcast <- statusBytes
-				break
-			}
-		}
-		previousFileSize = filesize
-		fileHandle.Close()
+		// fileHandle, err := os.OpenFile(l.logDir+"/"+l.file.Name(), os.O_RDONLY, 0666)
+		// if err != nil {
+		// 	log.Fatal("Cannot open file")
+		// }
+		// cursor = 0
+		// stat, _ := fileHandle.Stat()
+		// filesize := stat.Size()
+		// readBackward = true
+		// for {
+		// 	if readBackward {
+		// 		cursor-- //going backward
+		// 		fileHandle.Seek(cursor, io.SeekEnd)
+		// 		fileHandle.Read(char)
+		// 		if cursor != -1 && (char[0] == 10 || char[0] == 13) { // stop if we find a line
+		// 			if strings.Contains(line, "BFT: new round") {
+		// 				readBackward = false
+		// 			}
+		// 			line = ""
+		// 			continue
+		// 		}
+		// 		line = fmt.Sprintf("%s%s", string(char), line) // there is more efficient way
+		// 		if cursor == -filesize {
+		// 			if previousFileSize != filesize {
+		// 				l.isSuspectDown = false
+		// 			}
+		// 			statusBytes, _ := json.Marshal(LogStatusReponse{
+		// 				Node:            l.nodeNumber,
+		// 				Chain:           l.chain,
+		// 				ProducingStatus: BlockProducingStatus{"UNKNOWN", false, false, 0, 0, 0},
+		// 				IsSuspectDown:   l.isSuspectDown,
+		// 				ErrorsCount:     l.errorsCount,
+		// 				LatestErrorLine: l.latestErrorLine,
+		// 			})
+		// 			l.statusHub.broadcast <- statusBytes // stop if we are at the begining
+		// 			break
+		// 		}
+		// 	} else {
+		// 		scanner := bufio.NewScanner(fileHandle)
+		// 		for scanner.Scan() {
+		// 			l.readLogLine(scanner.Text())
+		// 		}
+		// 		if previousFileSize != filesize {
+		// 			l.isSuspectDown = false
+		// 		}
+
+		// 		break
+		// 	}
+		// }
+		statusBytes, _ := json.Marshal(LogStatusReponse{
+			Node:            l.nodeNumber,
+			Chain:           l.chain,
+			ProducingStatus: l.latestBlockProducingStatus,
+			IsSuspectDown:   l.isSuspectDown,
+			ErrorsCount:     l.errorsCount,
+			LatestErrorLine: l.latestErrorLine,
+		})
+		l.statusHub.broadcast <- statusBytes
 	}
 }
 
@@ -315,20 +426,41 @@ func (l *logTail) suspectDown() {
 	}
 }
 
-func (l *logTail) getErrorsOfLog() {
+func (l *logTail) GetConsensusOfLog(height int) []string {
+	var result []string
+
+	blkHeight, ok := l.heightsRecord[height]
+	if !ok {
+		return nil
+	}
+
 	fileHandle, err := os.OpenFile(l.logDir+"/"+l.file.Name(), os.O_RDONLY, 0666)
 	if err != nil {
 		log.Fatal("Cannot open file")
 	}
 
+	fileHandle.Seek(int64(blkHeight.start), io.SeekStart)
 	scanner := bufio.NewScanner(fileHandle)
+	currentLine := 1
 	for scanner.Scan() {
-		if strings.Contains(strings.ToLower(scanner.Text()), "[err]") {
-			l.errorsCount++
-			l.latestErrorLine = scanner.Text()
+		result = append(result, scanner.Text())
+		currentLine++
+		if (blkHeight.end != 0) && (currentLine == (blkHeight.end - blkHeight.start)) {
+			break
 		}
 	}
+	return result
+}
 
+func (l *logTail) GetHeightsRecord() []int {
+	var result []int
+	l.heightsRecordLck.RLock()
+	for h := range l.heightsRecord {
+		result = append(result, h)
+	}
+	sort.Ints(result)
+	l.heightsRecordLck.RUnlock()
+	return result
 }
 
 func getLogFileName(chain string, nodeNumber int) (string, string) {
