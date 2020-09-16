@@ -89,7 +89,7 @@ func main() {
 			height, _ := strconv.Atoi(r.URL.Query().Get("height"))
 			heightlogs := []string{}
 			if height > 0 {
-				heightlogs = logService.currentTailer[node].GetConsensusOfLog(height)
+				heightlogs = logService.currentTailer[node].GetLogOfHeight(height)
 			}
 			streamOnceWs(w, r, heightlogs)
 		} else {
