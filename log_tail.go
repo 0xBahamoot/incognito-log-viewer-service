@@ -198,7 +198,7 @@ func (l *logTail) tailLog() {
 							start: start,
 							end:   lineCount - 1,
 						}
-						log.Println(l.chain, l.nodeNumber, currentHeight, l.heightsRecord[currentHeight])
+						// log.Println(l.chain, l.nodeNumber, currentHeight, l.heightsRecord[currentHeight])
 					}
 					currentHeight = height
 					if _, ok := l.heightsRecord[currentHeight]; !ok {
@@ -354,62 +354,8 @@ func (l *logTail) Run() {
 func (l *logTail) sendLatestConsensusStatus() {
 
 	t := time.NewTicker(6 * time.Second)
-	//scan file in reverse byte by byte until we find a new line -> analyze that line if it have 'BFT: new round' then read forward from that line until EOF to get latest consensus status
-	// previousFileSize := int64(0)
-	// char := make([]byte, 1)
-	// line := ""
-	// var cursor int64
-	// readBackward := true
 	for {
 		<-t.C
-		// fileHandle, err := os.OpenFile(l.logDir+"/"+l.file.Name(), os.O_RDONLY, 0666)
-		// if err != nil {
-		// 	log.Fatal("Cannot open file")
-		// }
-		// cursor = 0
-		// stat, _ := fileHandle.Stat()
-		// filesize := stat.Size()
-		// readBackward = true
-		// for {
-		// 	if readBackward {
-		// 		cursor-- //going backward
-		// 		fileHandle.Seek(cursor, io.SeekEnd)
-		// 		fileHandle.Read(char)
-		// 		if cursor != -1 && (char[0] == 10 || char[0] == 13) { // stop if we find a line
-		// 			if strings.Contains(line, "BFT: new round") {
-		// 				readBackward = false
-		// 			}
-		// 			line = ""
-		// 			continue
-		// 		}
-		// 		line = fmt.Sprintf("%s%s", string(char), line) // there is more efficient way
-		// 		if cursor == -filesize {
-		// 			if previousFileSize != filesize {
-		// 				l.isSuspectDown = false
-		// 			}
-		// 			statusBytes, _ := json.Marshal(LogStatusReponse{
-		// 				Node:            l.nodeNumber,
-		// 				Chain:           l.chain,
-		// 				ProducingStatus: BlockProducingStatus{"UNKNOWN", false, false, 0, 0, 0},
-		// 				IsSuspectDown:   l.isSuspectDown,
-		// 				ErrorsCount:     l.errorsCount,
-		// 				LatestErrorLine: l.latestErrorLine,
-		// 			})
-		// 			l.statusHub.broadcast <- statusBytes // stop if we are at the begining
-		// 			break
-		// 		}
-		// 	} else {
-		// 		scanner := bufio.NewScanner(fileHandle)
-		// 		for scanner.Scan() {
-		// 			l.readLogLine(scanner.Text())
-		// 		}
-		// 		if previousFileSize != filesize {
-		// 			l.isSuspectDown = false
-		// 		}
-
-		// 		break
-		// 	}
-		// }
 		statusBytes, _ := json.Marshal(LogStatusReponse{
 			Node:            l.nodeNumber,
 			Chain:           l.chain,
