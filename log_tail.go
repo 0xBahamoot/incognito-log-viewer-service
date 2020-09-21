@@ -40,9 +40,11 @@ type logTail struct {
 }
 
 type heightRecord struct {
-	round int
-	start int
-	end   int
+	round      int
+	start      int
+	end        int
+	startTime  string
+	errorCount int
 }
 
 func openLatestLogForStream(logDir, chain string, nodeNumber int, fileList []os.FileInfo, lHub *Hub, statusHub *Hub) *logTail {
@@ -187,9 +189,13 @@ func (l *logTail) tailLog() {
 			if strings.Contains(strings.ToLower(line.Text), "[err]") {
 				l.errorsCount++
 				l.latestErrorLine = strings.ToLower(line.Text)
+				if currentHeight != 0 {
+					record := l.heightsRecord[currentHeight]
+					record.errorCount += 1
+				}
 			}
 
-			//update consensus
+			//update block record
 			if strings.Contains(line.Text, "BFT: new round") {
 				var re1 = regexp.MustCompile(`(?m)BFT: new round => (\w+) (\d+) (\d+)`)
 				bftStatus := re1.FindAllStringSubmatch(line.Text, -1)
@@ -208,9 +214,11 @@ func (l *logTail) tailLog() {
 					}
 					currentHeight = height
 					if _, ok := l.heightsRecord[currentHeight]; !ok {
+						sline := strings.Split(line.Text, " ")
 						record := heightRecord{
-							start: lineCount - 1,
-							round: round,
+							start:     lineCount - 1,
+							round:     round,
+							startTime: sline[1],
 						}
 						l.heightsRecord[currentHeight] = &record
 					}
@@ -221,7 +229,9 @@ func (l *logTail) tailLog() {
 				record.end = lineCount - 1
 			}
 			l.readLogLine(line.Text)
-			l.logHub.broadcast <- []byte(line.Text)
+			go func() {
+				l.logHub.broadcast <- []byte(line.Text)
+			}()
 		}
 
 	}
@@ -238,14 +248,14 @@ func (l *logTail) RetrieveLineFromEOF(lines int) []string {
 	stat, _ := fileHandle.Stat()
 	filesize := stat.Size()
 	char := make([]byte, 1)
-	currentReadLine := 0
+	currentReadLines := 0
 	line := ""
 	for {
 		cursor-- //going backward
 		fileHandle.Seek(cursor, io.SeekEnd)
 		fileHandle.Read(char)
 		if cursor != -1 && (char[0] == 10 || char[0] == 13) { // stop if we find a line
-			currentReadLine++
+			currentReadLines++
 			result = append(result, line)
 			line = ""
 			continue
@@ -254,7 +264,7 @@ func (l *logTail) RetrieveLineFromEOF(lines int) []string {
 		if cursor == -filesize {                       // stop if we are at the begining
 			break
 		}
-		if currentReadLine >= lines {
+		if currentReadLines >= lines {
 			break
 		}
 	}
@@ -262,14 +272,11 @@ func (l *logTail) RetrieveLineFromEOF(lines int) []string {
 }
 
 func (l *logTail) Run() {
-
 	l.heightsRecord = make(map[int]*heightRecord)
-	//count and get latest error of log
 	fileHandle, err := os.OpenFile(l.logDir+"/"+l.file.Name(), os.O_RDONLY, 0666)
 	if err != nil {
 		log.Fatal("Cannot open file")
 	}
-
 	lineCount := 1
 	scanner := bufio.NewScanner(fileHandle)
 	currentHeight := 0
@@ -279,6 +286,10 @@ func (l *logTail) Run() {
 		if strings.Contains(strings.ToLower(line), "[err]") {
 			l.errorsCount++
 			l.latestErrorLine = scanner.Text()
+			if currentHeight != 0 {
+				record := l.heightsRecord[currentHeight]
+				record.errorCount += 1
+			}
 		}
 		if strings.Contains(line, "BFT: new round") {
 			var re1 = regexp.MustCompile(`(?m)BFT: new round => (\w+) (\d+) (\d+)`)
@@ -297,9 +308,11 @@ func (l *logTail) Run() {
 				}
 				currentHeight = height
 				if _, ok := l.heightsRecord[currentHeight]; !ok {
+					sline := strings.Split(line, " ")
 					record := heightRecord{
-						start: lineCount - 1,
-						round: round,
+						start:     lineCount - 1,
+						round:     round,
+						startTime: sline[1],
 					}
 					l.heightsRecord[currentHeight] = &record
 				}
@@ -339,8 +352,7 @@ func (l *logTail) Run() {
 }
 
 func (l *logTail) sendLatestConsensusStatus() {
-
-	t := time.NewTicker(6 * time.Second)
+	t := time.NewTicker(3 * time.Second)
 	for {
 		<-t.C
 		statusBytes, _ := json.Marshal(LogStatusReponse{
@@ -356,7 +368,7 @@ func (l *logTail) sendLatestConsensusStatus() {
 }
 
 func (l *logTail) suspectDown() {
-	t := time.NewTicker(1 * time.Minute)
+	t := time.NewTicker(61 * time.Second)
 	for {
 		<-t.C
 		l.isSuspectDown = true
@@ -365,7 +377,6 @@ func (l *logTail) suspectDown() {
 
 func (l *logTail) GetLogOfHeight(height int) []string {
 	var result []string
-
 	blkHeight, ok := l.heightsRecord[height]
 	if !ok {
 		return nil
@@ -392,8 +403,10 @@ func (l *logTail) GetLogOfHeight(height int) []string {
 }
 
 type BlockInfo struct {
-	Round  int
-	Height int
+	Round      int
+	Height     int
+	ErrorCount int
+	StartTime  string
 }
 
 func (l *logTail) GetHeightsRecord() []BlockInfo {
@@ -406,7 +419,7 @@ func (l *logTail) GetHeightsRecord() []BlockInfo {
 	sort.Ints(sortRecord)
 
 	for _, height := range sortRecord {
-		result = append(result, BlockInfo{Round: l.heightsRecord[height].round, Height: height})
+		result = append(result, BlockInfo{Round: l.heightsRecord[height].round, Height: height, ErrorCount: l.heightsRecord[height].errorCount, StartTime: l.heightsRecord[height].startTime})
 	}
 	l.heightsRecordLck.RUnlock()
 	return result
