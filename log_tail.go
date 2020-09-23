@@ -30,6 +30,7 @@ type logTail struct {
 	file                       os.FileInfo
 	latestBlockProducingStatus BlockProducingStatus
 	isSuspectDown              bool
+	isSuspectDownCount         int
 	statusHub                  *Hub
 	logHub                     *Hub
 	resetTailLog               chan struct{}
@@ -183,7 +184,6 @@ func (l *logTail) tailLog() {
 			l.heightsRecord = make(map[int]*heightRecord)
 			log.Println("Reset tailler successful")
 		case line := <-t.Lines:
-			l.isSuspectDown = false
 			lineCount++
 			//update errors
 			if strings.Contains(strings.ToLower(line.Text), "[err]") {
@@ -229,6 +229,7 @@ func (l *logTail) tailLog() {
 				record.end = lineCount - 1
 			}
 			l.readLogLine(line.Text)
+			l.isSuspectDownCount = 0
 			go func() {
 				l.logHub.broadcast <- []byte(line.Text)
 			}()
@@ -352,7 +353,7 @@ func (l *logTail) Run() {
 }
 
 func (l *logTail) sendLatestConsensusStatus() {
-	t := time.NewTicker(3 * time.Second)
+	t := time.NewTicker(5 * time.Second)
 	for {
 		<-t.C
 		statusBytes, _ := json.Marshal(LogStatusReponse{
@@ -368,10 +369,15 @@ func (l *logTail) sendLatestConsensusStatus() {
 }
 
 func (l *logTail) suspectDown() {
-	t := time.NewTicker(61 * time.Second)
+	t := time.NewTicker(30 * time.Second)
 	for {
 		<-t.C
-		l.isSuspectDown = true
+		l.isSuspectDownCount++
+		if l.isSuspectDownCount >= 2 {
+			l.isSuspectDown = true
+		} else {
+			l.isSuspectDown = false
+		}
 	}
 }
 
