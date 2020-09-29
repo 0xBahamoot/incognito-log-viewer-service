@@ -205,7 +205,6 @@ func (l *logTail) tailLog() {
 					if currentHeight != height && currentHeight != 0 {
 						record := l.heightsRecord[currentHeight]
 						record.end = lineCount - 1
-						record.round = round
 						// log.Println(l.chain, l.nodeNumber, currentHeight, l.heightsRecord[currentHeight])
 					}
 					if currentHeight == height {
@@ -281,6 +280,8 @@ func (l *logTail) Run() {
 	lineCount := 1
 	scanner := bufio.NewScanner(fileHandle)
 	currentHeight := 0
+	buf := make([]byte, 0, 64*1024)
+	scanner.Buffer(buf, 1024*1024)
 	for scanner.Scan() {
 		line := scanner.Text()
 		lineCount++
@@ -301,7 +302,6 @@ func (l *logTail) Run() {
 				if currentHeight != height && currentHeight != 0 {
 					record := l.heightsRecord[currentHeight]
 					record.end = lineCount - 1
-					record.round = round
 				}
 				if currentHeight == height {
 					record := l.heightsRecord[currentHeight]
@@ -326,6 +326,11 @@ func (l *logTail) Run() {
 
 		l.readLogLine(line)
 	}
+	if err := scanner.Err(); err != nil {
+		log.Fatal("Something went wrong here!", lineCount, err)
+		panic(1)
+	}
+
 	go l.tailLog()
 	go l.suspectDown()
 	go l.sendLatestConsensusStatus()
@@ -396,6 +401,8 @@ func (l *logTail) GetLogOfHeight(height int) []string {
 	fileHandle.Seek(0, io.SeekStart)
 	scanner := bufio.NewScanner(fileHandle)
 	currentLine := 1
+	buf := make([]byte, 0, 64*1024)
+	scanner.Buffer(buf, 1024*1024)
 	for scanner.Scan() {
 		if currentLine >= blkHeight.start {
 			result = append(result, scanner.Text())
