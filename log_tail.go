@@ -38,6 +38,7 @@ type logTail struct {
 	latestErrorLine            string
 	heightsRecordLck           sync.RWMutex
 	heightsRecord              map[int]*heightRecord
+	internalBuf                []byte
 }
 
 type heightRecord struct {
@@ -280,8 +281,8 @@ func (l *logTail) Run() {
 	lineCount := 1
 	scanner := bufio.NewScanner(fileHandle)
 	currentHeight := 0
-	buf := make([]byte, 0, 64*1024)
-	scanner.Buffer(buf, 1024*1024)
+	l.internalBuf = make([]byte, 0, 64*1024)
+	scanner.Buffer(l.internalBuf, 1024*1024)
 	for scanner.Scan() {
 		line := scanner.Text()
 		lineCount++
@@ -358,7 +359,7 @@ func (l *logTail) Run() {
 }
 
 func (l *logTail) sendLatestConsensusStatus() {
-	t := time.NewTicker(5 * time.Second)
+	t := time.NewTicker(3 * time.Second)
 	for {
 		<-t.C
 		statusBytes, _ := json.Marshal(LogStatusReponse{
@@ -401,8 +402,7 @@ func (l *logTail) GetLogOfHeight(height int) []string {
 	fileHandle.Seek(0, io.SeekStart)
 	scanner := bufio.NewScanner(fileHandle)
 	currentLine := 1
-	buf := make([]byte, 0, 64*1024)
-	scanner.Buffer(buf, 1024*1024)
+	scanner.Buffer(l.internalBuf, 1024*1024)
 	for scanner.Scan() {
 		if currentLine >= blkHeight.start {
 			result = append(result, scanner.Text())
