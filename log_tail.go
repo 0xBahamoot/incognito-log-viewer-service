@@ -21,6 +21,7 @@ import (
 type logTailService struct {
 	currentTailerLck sync.RWMutex
 	currentTailer    map[string]*logTail
+	chainBlockHeight map[string]int
 }
 
 type logTail struct {
@@ -39,6 +40,7 @@ type logTail struct {
 	heightsRecordLck           sync.RWMutex
 	heightsRecord              map[int]*heightRecord
 	internalBuf                []byte
+	logService                 *logTailService
 }
 
 type heightRecord struct {
@@ -77,6 +79,7 @@ OPENLATEST:
 
 func (lsrv *logTailService) Init(logDir string, lHub *logHub, statusHub *Hub) {
 	lsrv.currentTailer = make(map[string]*logTail)
+	lsrv.chainBlockHeight = make(map[string]int)
 	files, err := ioutil.ReadDir(logDir)
 	if err != nil {
 		log.Fatal(err)
@@ -88,6 +91,7 @@ func (lsrv *logTailService) Init(logDir string, lHub *logHub, statusHub *Hub) {
 			hub := newHub()
 			lHub.add(n, hub)
 			streamer := openLatestLogForStream(logDir, "beacon", node, files, hub, statusHub)
+			streamer.logService = lsrv
 			lsrv.addLogStreamer(n, streamer)
 			streamer.Run()
 		}(i)
@@ -112,6 +116,25 @@ func (lsrv *logTailService) addLogStreamer(node string, streamer *logTail) {
 	lsrv.currentTailerLck.Lock()
 	lsrv.currentTailer[node] = streamer
 	lsrv.currentTailerLck.Unlock()
+}
+
+func (lsrv *logTailService) updateBlockHeight(chain string, height int) {
+	lsrv.currentTailerLck.Lock()
+	defer lsrv.currentTailerLck.Unlock()
+	if h, ok := lsrv.chainBlockHeight[chain]; ok {
+		if height > h {
+			lsrv.chainBlockHeight[chain] = height
+		}
+	} else {
+		lsrv.chainBlockHeight[chain] = height
+	}
+	return
+}
+
+func (lsrv *logTailService) getBlockHeight(chain string) int {
+	lsrv.currentTailerLck.RLock()
+	defer lsrv.currentTailerLck.RUnlock()
+	return lsrv.chainBlockHeight[chain]
 }
 
 func (l *logTail) readLogLine(line string, lineCount int) {
@@ -148,6 +171,7 @@ func (l *logTail) readLogLine(line string, lineCount int) {
 					startTime: sline[1],
 				}
 				l.heightsRecord[currentHeight] = &record
+				l.logService.updateBlockHeight(l.chain, currentHeight)
 			}
 
 			return
@@ -316,14 +340,18 @@ func (l *logTail) sendLatestConsensusStatus() {
 	t := time.NewTicker(3 * time.Second)
 	for {
 		<-t.C
-		statusBytes, _ := json.Marshal(LogStatusReponse{
+		status := LogStatusReponse{
 			Node:            l.nodeNumber,
 			Chain:           l.chain,
 			ProducingStatus: l.latestBlockProducingStatus,
 			IsSuspectDown:   l.isSuspectDown,
 			ErrorsCount:     l.errorsCount,
 			LatestErrorLine: l.latestErrorLine,
-		})
+		}
+		if chainHeight := l.logService.getBlockHeight(l.chain); int(l.latestBlockProducingStatus.BlockHeight) <= chainHeight-2 {
+			status.IsSuspectDown = true
+		}
+		statusBytes, _ := json.Marshal(status)
 		l.statusHub.broadcast <- statusBytes
 	}
 }
