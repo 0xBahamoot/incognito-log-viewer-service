@@ -42,11 +42,20 @@ type logTail struct {
 }
 
 type heightRecord struct {
+	timeslot   int
 	round      int
 	start      int
 	end        int
 	startTime  string
 	errorCount int
+}
+
+type BlockInfo struct {
+	Timeslot   int
+	Round      int
+	Height     int
+	ErrorCount int
+	StartTime  string
 }
 
 func openLatestLogForStream(logDir, chain string, nodeNumber int, fileList []os.FileInfo, lHub *Hub, statusHub *Hub) *logTail {
@@ -117,14 +126,16 @@ func (lsrv *logTailService) addLogStreamer(node string, streamer *logTail) {
 func (l *logTail) readLogLine(line string, lineCount int) {
 	line = strings.ToLower(line)
 	currentHeight := int(l.latestBlockProducingStatus.BlockHeight)
-	if strings.Contains(line, "consensus log") {
-		var re1 = regexp.MustCompile(`(?m)bft: new round => (\w+) (\d+) (\d+)`)
+	if strings.Contains(line, "consensus:") {
+		var re1 = regexp.MustCompile(`(?m)consensus: (\w+) ts: (\d+), (\w+) block (\d+), round (\d+)`)
 		bftStatus := re1.FindAllStringSubmatch(line, -1)
 		if len(bftStatus) == 1 {
-			height, _ := strconv.Atoi(bftStatus[0][2])
-			round, _ := strconv.Atoi(bftStatus[0][3])
+			timeslot, _ := strconv.Atoi(bftStatus[0][2])
+			height, _ := strconv.Atoi(bftStatus[0][4])
+			round, _ := strconv.Atoi(bftStatus[0][5])
 			l.latestBlockProducingStatus.Phase = strings.ToUpper(bftStatus[0][1])
 			l.latestBlockProducingStatus.BlockHeight = int64(height)
+			l.latestBlockProducingStatus.Timeslot = timeslot
 			l.latestBlockProducingStatus.Round = round
 			l.latestBlockProducingStatus.IsBlockReceived = false
 			l.latestBlockProducingStatus.IsVoteSent = false
@@ -149,24 +160,20 @@ func (l *logTail) readLogLine(line string, lineCount int) {
 				}
 				l.heightsRecord[currentHeight] = &record
 			}
-
 			return
 		}
 
-		// "receive block" doesn't mean node has received the right block!
-		if strings.Contains(line, "enter voting phase") || strings.Contains(line, "sending vote...") {
+		if strings.Contains(line, "sending vote...") {
 			l.latestBlockProducingStatus.Phase = "VOTING"
 			l.latestBlockProducingStatus.IsBlockReceived = true
-			if strings.Contains(line, "sending vote...") {
-				l.latestBlockProducingStatus.IsVoteSent = true
-				return
-			}
+			l.latestBlockProducingStatus.IsVoteSent = true
 			return
 		}
-		if strings.Contains(line, "vote added") {
+		if strings.Contains(line, "receive vote for block") {
 			l.latestBlockProducingStatus.VoteCount++
 			return
 		}
+
 		if strings.Contains(line, "commit block") {
 			l.latestBlockProducingStatus.Phase = "COMMIT"
 			return
@@ -369,13 +376,6 @@ func (l *logTail) GetLogOfHeight(height int) []string {
 	return result
 }
 
-type BlockInfo struct {
-	Round      int
-	Height     int
-	ErrorCount int
-	StartTime  string
-}
-
 func (l *logTail) GetHeightsRecord() []BlockInfo {
 	var result []BlockInfo
 	l.heightsRecordLck.RLock()
@@ -386,7 +386,7 @@ func (l *logTail) GetHeightsRecord() []BlockInfo {
 	sort.Ints(sortRecord)
 
 	for _, height := range sortRecord {
-		result = append(result, BlockInfo{Round: l.heightsRecord[height].round, Height: height, ErrorCount: l.heightsRecord[height].errorCount, StartTime: l.heightsRecord[height].startTime})
+		result = append(result, BlockInfo{Timeslot: l.heightsRecord[height].timeslot, Round: l.heightsRecord[height].round, Height: height, ErrorCount: l.heightsRecord[height].errorCount, StartTime: l.heightsRecord[height].startTime})
 	}
 	l.heightsRecordLck.RUnlock()
 	return result
