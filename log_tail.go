@@ -114,23 +114,45 @@ func (lsrv *logTailService) addLogStreamer(node string, streamer *logTail) {
 	lsrv.currentTailerLck.Unlock()
 }
 
-func (l *logTail) readLogLine(line string) {
+func (l *logTail) readLogLine(line string, lineCount int) {
 	line = strings.ToLower(line)
+	currentHeight := int(l.latestBlockProducingStatus.BlockHeight)
 	if strings.Contains(line, "consensus log") {
 		var re1 = regexp.MustCompile(`(?m)bft: new round => (\w+) (\d+) (\d+)`)
 		bftStatus := re1.FindAllStringSubmatch(line, -1)
 		if len(bftStatus) == 1 {
-			l.latestBlockProducingStatus.Phase = strings.ToUpper(bftStatus[0][1])
 			height, _ := strconv.Atoi(bftStatus[0][2])
-			l.latestBlockProducingStatus.BlockHeight = int64(height)
 			round, _ := strconv.Atoi(bftStatus[0][3])
+			l.latestBlockProducingStatus.Phase = strings.ToUpper(bftStatus[0][1])
+			l.latestBlockProducingStatus.BlockHeight = int64(height)
 			l.latestBlockProducingStatus.Round = round
 			l.latestBlockProducingStatus.IsBlockReceived = false
 			l.latestBlockProducingStatus.IsVoteSent = false
 			l.latestBlockProducingStatus.VoteCount = 0
+
+			if currentHeight != height && currentHeight != 0 {
+				record := l.heightsRecord[currentHeight]
+				record.end = lineCount - 1
+				// log.Println(l.chain, l.nodeNumber, currentHeight, l.heightsRecord[currentHeight])
+			}
+			if currentHeight == height {
+				record := l.heightsRecord[currentHeight]
+				record.round = round
+			}
+			currentHeight = height
+			if _, ok := l.heightsRecord[currentHeight]; !ok {
+				sline := strings.Split(line, " ")
+				record := heightRecord{
+					start:     lineCount - 1,
+					round:     round,
+					startTime: sline[1],
+				}
+				l.heightsRecord[currentHeight] = &record
+			}
+
 			return
 		}
-		line = strings.ToLower(line)
+
 		// "receive block" doesn't mean node has received the right block!
 		if strings.Contains(line, "enter voting phase") || strings.Contains(line, "sending vote...") {
 			l.latestBlockProducingStatus.Phase = "VOTING"
@@ -150,6 +172,22 @@ func (l *logTail) readLogLine(line string) {
 			return
 		}
 	}
+
+	//update errors
+	if strings.Contains(line, "[err]") {
+		l.errorsCount++
+		l.latestErrorLine = line
+		if l.latestBlockProducingStatus.BlockHeight != 0 {
+			record := l.heightsRecord[int(l.latestBlockProducingStatus.BlockHeight)]
+			record.errorCount += 1
+		}
+	}
+
+	if currentHeight != 0 {
+		record := l.heightsRecord[currentHeight]
+		record.end = lineCount - 1
+	}
+
 }
 
 func (l *logTail) tailLog() {
@@ -161,11 +199,9 @@ func (l *logTail) tailLog() {
 	if err != nil {
 		log.Fatal(err)
 	}
-	lineCount := 1
-	currentHeight := 0
+	lineCount := 0
 	if l.latestBlockProducingStatus.BlockHeight != 0 {
 		lineCount = l.heightsRecord[int(l.latestBlockProducingStatus.BlockHeight)].end
-		currentHeight = int(l.latestBlockProducingStatus.BlockHeight)
 	}
 	for {
 		select {
@@ -180,55 +216,13 @@ func (l *logTail) tailLog() {
 			if err != nil {
 				log.Fatal(err)
 			}
-			lineCount = 1
-			currentHeight = 0
+			lineCount = 0
 			l.heightsRecord = make(map[int]*heightRecord)
+			l.latestBlockProducingStatus = BlockProducingStatus{}
 			log.Println("Reset tailler successful")
 		case line := <-t.Lines:
 			lineCount++
-			//update errors
-			if strings.Contains(strings.ToLower(line.Text), "[err]") {
-				l.errorsCount++
-				l.latestErrorLine = strings.ToLower(line.Text)
-				if currentHeight != 0 {
-					record := l.heightsRecord[currentHeight]
-					record.errorCount += 1
-				}
-			}
-
-			//update block record
-			if strings.Contains(line.Text, "BFT: new round") {
-				var re1 = regexp.MustCompile(`(?m)BFT: new round => (\w+) (\d+) (\d+)`)
-				bftStatus := re1.FindAllStringSubmatch(line.Text, -1)
-				if len(bftStatus) == 1 {
-					height, _ := strconv.Atoi(bftStatus[0][2])
-					round, _ := strconv.Atoi(bftStatus[0][3])
-					if currentHeight != height && currentHeight != 0 {
-						record := l.heightsRecord[currentHeight]
-						record.end = lineCount - 1
-						// log.Println(l.chain, l.nodeNumber, currentHeight, l.heightsRecord[currentHeight])
-					}
-					if currentHeight == height {
-						record := l.heightsRecord[currentHeight]
-						record.round = round
-					}
-					currentHeight = height
-					if _, ok := l.heightsRecord[currentHeight]; !ok {
-						sline := strings.Split(line.Text, " ")
-						record := heightRecord{
-							start:     lineCount - 1,
-							round:     round,
-							startTime: sline[1],
-						}
-						l.heightsRecord[currentHeight] = &record
-					}
-				}
-			}
-			if currentHeight != 0 {
-				record := l.heightsRecord[currentHeight]
-				record.end = lineCount - 1
-			}
-			l.readLogLine(line.Text)
+			l.readLogLine(line.Text, lineCount)
 			l.isSuspectDownCount = 0
 			go func() {
 				l.logHub.broadcast <- []byte(line.Text)
@@ -280,52 +274,12 @@ func (l *logTail) Run() {
 	}
 	lineCount := 1
 	scanner := bufio.NewScanner(fileHandle)
-	currentHeight := 0
 	l.internalBuf = make([]byte, 0, 64*1024)
 	scanner.Buffer(l.internalBuf, 1024*1024)
 	for scanner.Scan() {
 		line := scanner.Text()
 		lineCount++
-		if strings.Contains(strings.ToLower(line), "[err]") {
-			l.errorsCount++
-			l.latestErrorLine = scanner.Text()
-			if currentHeight != 0 {
-				record := l.heightsRecord[currentHeight]
-				record.errorCount += 1
-			}
-		}
-		if strings.Contains(line, "BFT: new round") {
-			var re1 = regexp.MustCompile(`(?m)BFT: new round => (\w+) (\d+) (\d+)`)
-			bftStatus := re1.FindAllStringSubmatch(line, -1)
-			if len(bftStatus) == 1 {
-				height, _ := strconv.Atoi(bftStatus[0][2])
-				round, _ := strconv.Atoi(bftStatus[0][3])
-				if currentHeight != height && currentHeight != 0 {
-					record := l.heightsRecord[currentHeight]
-					record.end = lineCount - 1
-				}
-				if currentHeight == height {
-					record := l.heightsRecord[currentHeight]
-					record.round = round
-				}
-				currentHeight = height
-				if _, ok := l.heightsRecord[currentHeight]; !ok {
-					sline := strings.Split(line, " ")
-					record := heightRecord{
-						start:     lineCount - 1,
-						round:     round,
-						startTime: sline[1],
-					}
-					l.heightsRecord[currentHeight] = &record
-				}
-			}
-		}
-		if currentHeight != 0 {
-			record := l.heightsRecord[currentHeight]
-			record.end = lineCount - 1
-		}
-
-		l.readLogLine(line)
+		l.readLogLine(line, lineCount)
 	}
 	if err := scanner.Err(); err != nil {
 		log.Fatal("Something went wrong here!", lineCount, err)
