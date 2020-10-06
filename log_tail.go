@@ -133,7 +133,7 @@ func (l *logTail) readLogLine(line string, lineCount int) {
 			timeslot, _ := strconv.Atoi(bftStatus[0][2])
 			height, _ := strconv.Atoi(bftStatus[0][4])
 			round, _ := strconv.Atoi(bftStatus[0][5])
-			l.latestBlockProducingStatus.Phase = strings.ToUpper(bftStatus[0][1])
+			l.latestBlockProducingStatus.Phase = strings.ToUpper(bftStatus[0][3])
 			l.latestBlockProducingStatus.BlockHeight = int64(height)
 			l.latestBlockProducingStatus.Timeslot = timeslot
 			l.latestBlockProducingStatus.Round = round
