@@ -2,11 +2,13 @@ package main
 
 import (
 	"bufio"
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"io"
 	"io/ioutil"
 	"log"
+	"net/http"
 	"os"
 	"regexp"
 	"sort"
@@ -41,6 +43,7 @@ type logTail struct {
 	heightsRecord              map[int]*heightRecord
 	internalBuf                []byte
 	logService                 *logTailService
+	lastAlertSend              time.Time
 }
 
 type heightRecord struct {
@@ -105,6 +108,7 @@ func (lsrv *logTailService) Init(logDir string, lHub *logHub, statusHub *Hub) {
 				hub := newHub()
 				lHub.add(n, hub)
 				streamer := openLatestLogForStream(logDir, shardChain, node, files, hub, statusHub)
+				streamer.logService = lsrv
 				lsrv.addLogStreamer(n, streamer)
 				streamer.Run()
 			}(s, i)
@@ -134,7 +138,10 @@ func (lsrv *logTailService) updateBlockHeight(chain string, height int) {
 func (lsrv *logTailService) getBlockHeight(chain string) int {
 	lsrv.currentTailerLck.RLock()
 	defer lsrv.currentTailerLck.RUnlock()
-	return lsrv.chainBlockHeight[chain]
+	if h, ok := lsrv.chainBlockHeight[chain]; ok {
+		return h
+	}
+	return 0
 }
 
 func (l *logTail) readLogLine(line string, lineCount int) {
@@ -351,6 +358,10 @@ func (l *logTail) sendLatestConsensusStatus() {
 		if chainHeight := l.logService.getBlockHeight(l.chain); int(l.latestBlockProducingStatus.BlockHeight) <= chainHeight-2 {
 			status.IsSuspectDown = true
 		}
+		if status.IsSuspectDown && time.Now().Sub(l.lastAlertSend) > time.Hour {
+			sendSlackNoti(fmt.Sprintf("Node %v has problems 😱", l.chain+strconv.Itoa(l.nodeNumber)))
+			l.lastAlertSend = time.Now()
+		}
 		statusBytes, _ := json.Marshal(status)
 		l.statusHub.broadcast <- statusBytes
 	}
@@ -444,4 +455,23 @@ func getLogFileForFileList(filePrefix, fileSuffix string, fileList []os.FileInfo
 		}
 	}
 	return logFile
+}
+
+func sendSlackNoti(text string) {
+	content := struct {
+		Text string `json:'text'`
+	}{
+		Text: text,
+	}
+	contentBytes, err := json.Marshal(content)
+	if err != nil {
+		log.Println(err)
+		return
+	}
+	httpClient := http.DefaultClient
+	resp, err := httpClient.Post(os.Getenv("SLACKHOOK"), "application/json", bytes.NewReader(contentBytes))
+	if err != nil {
+		log.Println(err)
+	}
+	defer resp.Body.Close()
 }
