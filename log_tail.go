@@ -24,6 +24,8 @@ type logTailService struct {
 	currentTailerLck sync.RWMutex
 	currentTailer    map[string]*logTail
 	chainBlockHeight map[string]int
+	notiChan         chan string
+	notiArray        []string
 }
 
 type logTail struct {
@@ -87,7 +89,7 @@ func (lsrv *logTailService) Init(logDir string, lHub *logHub, statusHub *Hub) {
 	if err != nil {
 		log.Fatal(err)
 	}
-
+	go lsrv.slackHook()
 	for i := 0; i <= NumberOfBeaconNode-1; i++ {
 		go func(node int) {
 			n := "beacon" + strconv.Itoa(node)
@@ -142,6 +144,27 @@ func (lsrv *logTailService) getBlockHeight(chain string) int {
 		return h
 	}
 	return 0
+}
+
+func (lsrv *logTailService) slackHook() {
+	lsrv.notiChan = make(chan string)
+	t := time.NewTicker(30 * time.Second)
+	for {
+		select {
+		case noti := <-lsrv.notiChan:
+			lsrv.currentTailerLck.Lock()
+			lsrv.notiArray = append(lsrv.notiArray, noti)
+			lsrv.currentTailerLck.Unlock()
+		case <-t.C:
+			lsrv.currentTailerLck.Lock()
+			if len(lsrv.notiArray) > 0 {
+				texts := strings.Join(lsrv.notiArray, "\n")
+				sendSlackNoti(texts)
+				lsrv.notiArray = []string{}
+			}
+			lsrv.currentTailerLck.Unlock()
+		}
+	}
 }
 
 func (l *logTail) readLogLine(line string, lineCount int) {
@@ -359,7 +382,10 @@ func (l *logTail) sendLatestConsensusStatus() {
 			status.IsSuspectDown = true
 		}
 		if status.IsSuspectDown && time.Now().Sub(l.lastAlertSend) > time.Hour {
-			sendSlackNoti(fmt.Sprintf("Node %v has problems 😱", l.chain+strconv.Itoa(l.nodeNumber)))
+			node := l.chain + strconv.Itoa(l.nodeNumber)
+			log.Println(fmt.Sprintf("Node %v has problems 😱", node))
+			// url := "http://149.56.25.24:8084/logviewer?node=" + node + "&lines=100"
+			l.logService.notiChan <- fmt.Sprintf("Node %v has problems 😱 ", node)
 			l.lastAlertSend = time.Now()
 		}
 		statusBytes, _ := json.Marshal(status)
@@ -459,7 +485,7 @@ func getLogFileForFileList(filePrefix, fileSuffix string, fileList []os.FileInfo
 
 func sendSlackNoti(text string) {
 	content := struct {
-		Text string `json:'text'`
+		Text string `json:"text"`
 	}{
 		Text: text,
 	}
@@ -470,8 +496,11 @@ func sendSlackNoti(text string) {
 	}
 	httpClient := http.DefaultClient
 	resp, err := httpClient.Post(os.Getenv("SLACKHOOK"), "application/json", bytes.NewReader(contentBytes))
-	if err != nil {
+	if resp.Status != "200" || err != nil {
 		log.Println(err)
+		body, _ := ioutil.ReadAll(resp.Body)
+		log.Println(string(body))
 	}
 	defer resp.Body.Close()
+	return
 }
