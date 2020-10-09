@@ -273,6 +273,7 @@ func (l *logTail) tailLog() {
 			lineCount = 0
 			l.heightsRecord = make(map[int]*heightRecord)
 			l.latestBlockProducingStatus = BlockProducingStatus{}
+			l.isSuspectDownCount = 0
 			log.Println("Reset tailler successful")
 		case line := <-t.Lines:
 			lineCount++
