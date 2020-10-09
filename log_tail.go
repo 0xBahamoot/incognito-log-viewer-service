@@ -398,7 +398,7 @@ func (l *logTail) suspectDown() {
 	for {
 		<-t.C
 		l.isSuspectDownCount++
-		if l.isSuspectDownCount >= 2 {
+		if l.isSuspectDownCount >= 10 {
 			l.isSuspectDown = true
 		} else {
 			l.isSuspectDown = false
