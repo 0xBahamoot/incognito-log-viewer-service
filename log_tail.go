@@ -379,14 +379,22 @@ func (l *logTail) sendLatestConsensusStatus() {
 			ErrorsCount:     l.errorsCount,
 			LatestErrorLine: l.latestErrorLine,
 		}
-		if chainHeight := l.logService.getBlockHeight(l.chain); int(l.latestBlockProducingStatus.BlockHeight) <= chainHeight-2 {
+		if chainHeight := l.logService.getBlockHeight(l.chain); int(l.latestBlockProducingStatus.BlockHeight) <= chainHeight-5 && l.latestBlockProducingStatus.BlockHeight != 0 {
 			status.IsSuspectDown = true
+			if time.Now().Sub(l.lastAlertSend) > time.Hour {
+				node := l.chain + strconv.Itoa(l.nodeNumber)
+				line := fmt.Sprintf("Node %v block height is behind %v 😱", node, chainHeight-int(l.latestBlockProducingStatus.BlockHeight))
+				log.Println(line)
+				l.logService.notiChan <- line
+				l.lastAlertSend = time.Now()
+			}
 		}
-		if status.IsSuspectDown && time.Now().Sub(l.lastAlertSend) > time.Hour {
+
+		if l.isSuspectDown && l.isSuspectDownCount > 10 && time.Now().Sub(l.lastAlertSend) > time.Hour {
 			node := l.chain + strconv.Itoa(l.nodeNumber)
-			log.Println(fmt.Sprintf("Node %v has problems 😱", node))
-			// url := "http://149.56.25.24:8084/logviewer?node=" + node + "&lines=100"
-			l.logService.notiChan <- fmt.Sprintf("Node %v has problems 😱 ", node)
+			line := fmt.Sprintf("Node %v stopped logging 😱", node)
+			log.Println(line)
+			l.logService.notiChan <- line
 			l.lastAlertSend = time.Now()
 		}
 		statusBytes, _ := json.Marshal(status)
