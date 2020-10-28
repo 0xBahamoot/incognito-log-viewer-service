@@ -468,7 +468,12 @@ func (l *logTail) GetHeightsRecord() []BlockInfo {
 
 func getLogFileName(chain string, nodeNumber int) (string, string) {
 	date := time.Now().Format("2006-01-02")
-	filePrefix := chain + strconv.Itoa(nodeNumber) + "_new"
+	filePrefix := chain + strconv.Itoa(nodeNumber)
+	if chain == "beacon" {
+		filePrefix += "_fullnode"
+	} else {
+		filePrefix += "_new"
+	}
 	fileSuffix := date + ".log"
 	return filePrefix, fileSuffix
 }
