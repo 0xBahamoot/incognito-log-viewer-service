@@ -46,13 +46,14 @@ func main() {
 
 	statusHub := newHub()
 	go statusHub.run()
-
+	go watchDiskUsage(*logdir)
 	logService := logTailService{}
 	logService.Init(*logdir, &lHub, statusHub)
 
 	fileServer := http.FileServer(http.Dir("./web"))
 	http.Handle("/", fileServer)
 	staticHandler := http.StripPrefix("/logviewer", http.FileServer(http.Dir("./web")))
+	http.HandleFunc("/getdiskleft", diskLeftHandler)
 	http.Handle("/logviewer", staticHandler)
 	http.HandleFunc("/downloadlog", downloadLog)
 	http.HandleFunc("/streamlog", func(w http.ResponseWriter, r *http.Request) {
