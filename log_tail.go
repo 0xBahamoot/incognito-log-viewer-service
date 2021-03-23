@@ -171,14 +171,16 @@ func (l *logTail) readLogLine(line string, lineCount int) {
 	line = strings.ToLower(line)
 	currentHeight := int(l.latestBlockProducingStatus.BlockHeight)
 	if strings.Contains(line, "consensus log") {
-		var re1 = regexp.MustCompile(`(?m)bft: new round => (\w+) (\d+) (\d+)`)
+		var re1 = regexp.MustCompile(`(?m)(\w+) ts: (\d+), (\w+) block (\d+), round (\d+)`)
 		bftStatus := re1.FindAllStringSubmatch(line, -1)
 		if len(bftStatus) == 1 {
-			height, _ := strconv.Atoi(bftStatus[0][2])
-			round, _ := strconv.Atoi(bftStatus[0][3])
-			l.latestBlockProducingStatus.Phase = strings.ToUpper(bftStatus[0][1])
+			timeslot, _ := strconv.Atoi(bftStatus[0][2])
+			height, _ := strconv.Atoi(bftStatus[0][4])
+			round, _ := strconv.Atoi(bftStatus[0][5])
+			l.latestBlockProducingStatus.Phase = strings.ToUpper(bftStatus[0][3])
 			l.latestBlockProducingStatus.BlockHeight = int64(height)
 			l.latestBlockProducingStatus.Round = round
+			l.latestBlockProducingStatus.Timeslot = timeslot
 			l.latestBlockProducingStatus.IsBlockReceived = false
 			l.latestBlockProducingStatus.IsVoteSent = false
 			l.latestBlockProducingStatus.VoteCount = 0
@@ -186,7 +188,6 @@ func (l *logTail) readLogLine(line string, lineCount int) {
 			if currentHeight != height && currentHeight != 0 {
 				record := l.heightsRecord[currentHeight]
 				record.end = lineCount - 1
-				// log.Println(l.chain, l.nodeNumber, currentHeight, l.heightsRecord[currentHeight])
 			}
 			if currentHeight == height {
 				record := l.heightsRecord[currentHeight]
@@ -207,8 +208,7 @@ func (l *logTail) readLogLine(line string, lineCount int) {
 			return
 		}
 
-		// "receive block" doesn't mean node has received the right block!
-		if strings.Contains(line, "enter voting phase") || strings.Contains(line, "sending vote...") {
+		if strings.Contains(line, "sending vote...") {
 			l.latestBlockProducingStatus.Phase = "VOTING"
 			l.latestBlockProducingStatus.IsBlockReceived = true
 			if strings.Contains(line, "sending vote...") {
@@ -217,8 +217,12 @@ func (l *logTail) readLogLine(line string, lineCount int) {
 			}
 			return
 		}
-		if strings.Contains(line, "vote added") {
-			l.latestBlockProducingStatus.VoteCount++
+		if strings.Contains(line, "receive vote") {
+			var re1 = regexp.MustCompile(`(?m)(\w+) receive vote \((\d+)\) for block (\w+) from validator (\d+) (\w+)`)
+			vote := re1.FindAllStringSubmatch(line, -1)
+			if len(vote) == 1 {
+				l.latestBlockProducingStatus.VoteCount, _ = strconv.Atoi(vote[0][2])
+			}
 			return
 		}
 		if strings.Contains(line, "commit block") {

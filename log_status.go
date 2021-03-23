@@ -21,6 +21,7 @@ type BlockProducingStatus struct {
 	VoteCount       int
 	BlockHeight     int64
 	Round           int
+	Timeslot        int
 }
 
 // streamlogWs handles websocket requests from the peer.
